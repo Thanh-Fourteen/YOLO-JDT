@@ -1,0 +1,44 @@
+# YOLO-JDT ruff config.
+# Line length matches research-codebase norms (slightly longer than 88 for ML tensor ops).
+
+target-version = "py311"
+line-length = 100
+extend-exclude = [
+    "third_party/",
+    "datasets/",
+    "weights/",
+    "runs/",
+    "paper/",
+    "*.ipynb_checkpoints",
+]
+
+[lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+    "C4",  # flake8-comprehensions
+    "SIM", # flake8-simplify
+    "RUF", # ruff-specific
+]
+ignore = [
+    "E501",  # line too long (we set line-length explicitly, prefer to allow occasional overruns in comments)
+    "B008",  # function call in default arg — common for Hydra / dataclass init
+]
+unfixable = ["B"]
+
+[lint.per-file-ignores]
+"yolo_jdt/tests/*" = ["F401", "F811"]  # test fixtures often re-import
+"yolo_jdt/scripts/*" = ["E402"]        # scripts may set env vars before imports
+
+[lint.isort]
+known-first-party = ["yolo_jdt"]
+known-third-party = ["torch", "pytorch_lightning", "hydra", "omegaconf", "wandb", "cv2", "numpy", "scipy"]
+
+[format]
+quote-style = "double"
+indent-style = "space"
+docstring-code-format = true

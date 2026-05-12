@@ -1,0 +1,68 @@
+# Claude Code local overrides
+.claude/settings.local.json
+
+# Ruff cache
+.ruff_cache/
+
+# Personal notes
+my_note.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Virtual env (env is conda-managed, but in case)
+.venv/
+venv/
+env/
+
+# Data — too large to commit
+datasets/raw/
+datasets/standard/
+weights/pretrained/
+weights/ours/
+weights/exported/
+runs/
+
+# Logs
+*.log
+wandb/
+lightning_logs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Notebooks
+.ipynb_checkpoints/
+
+# TensorRT
+*.engine
+*.plan
+*.trt
+
+# ONNX
+*.onnx
+
+# Profiling
+*.nsys-rep
+*.qdrep
