@@ -63,19 +63,30 @@ echo "[$(date +%H:%M:%S)] [2/3] promote OK"
 
 # ---------------------------------------------------------------------------
 echo ""
-echo "[$(date +%H:%M:%S)] === [3/3] Eval mAP -> JSON ==="
+echo "[$(date +%H:%M:%S)] === [3/4] Eval mAP -> JSON ==="
 python -m yolo_jdt.scripts.eval_det \
   --output runs/baselines/detection_map.json \
   --weights weights/ours/yolo11s_det.pt --scale s \
   --batch_size 8 --num_workers 4 \
-  || echo "[$(date +%H:%M:%S)] [3/3] EVAL FAILED — ckpt is still saved, run manually on return"
+  || echo "[$(date +%H:%M:%S)] [3/4] EVAL FAILED — ckpt is still saved, run manually on return"
+
+# ---------------------------------------------------------------------------
+echo ""
+echo "[$(date +%H:%M:%S)] === [4/4] Package run dir (RUN_INFO.md + snapshots) ==="
+python -m yolo_jdt.scripts.package_run \
+  --run-dir runs/baselines/step3a_yolo11s_70ep \
+  --log-source /tmp/step3a.log \
+  --eval-json runs/baselines/detection_map.json \
+  --promoted weights/ours/yolo11s_det.pt \
+  --phase "3.A" \
+  --notes "Step 3.A baseline overnight: YOLO11s 70ep single-GPU bs=8 lr0=0.001 BF16 EMA, CrowdHuman + MOT17 train_half (person-only)." \
+  || echo "[$(date +%H:%M:%S)] [4/4] PACKAGE FAILED — RUN_INFO.md not generated, but artifacts still in place"
 
 echo ""
 echo "[$(date +%H:%M:%S)] === ALL DONE ==="
 echo ""
-echo "Artifacts:"
-ls -la weights/ours/yolo11s_det.pt 2>/dev/null || echo "  (no promoted ckpt)"
-ls -la runs/baselines/detection_map.json 2>/dev/null || echo "  (no detection_map.json)"
+echo "Run dir:"
+ls -la runs/baselines/step3a_yolo11s_70ep/ 2>/dev/null
 echo ""
-echo "Final mAP:"
-cat runs/baselines/detection_map.json 2>/dev/null || echo "  (eval did not finish)"
+echo "See full summary:"
+echo "  cat runs/baselines/step3a_yolo11s_70ep/RUN_INFO.md"
