@@ -1,0 +1,69 @@
+# YOLO-JDT detection fine-tune (Step 3.A) — base config.
+# Override on command line with Hydra syntax, e.g.
+#   python -m yolo_jdt.scripts.train -cn base model.scale=m trainer.devices=2
+
+defaults:
+  - _self_
+
+seed: 0
+run_name: base_yolo11s
+output_dir: runs/baselines/${run_name}
+
+model:
+  scale: s                              # s | m
+  nc: 1                                 # person only
+  reg_max: 16
+  imgsz: 640
+  pretrained_weights: weights/pretrained/yolo11s.pt   # null = scratch
+  channels_last: true
+  # Loss gains (Ultralytics defaults)
+  box_gain: 7.5
+  cls_gain: 0.5
+  dfl_gain: 1.5
+  # Optimizer
+  lr0: 0.01
+  lrf: 0.01
+  momentum: 0.937
+  weight_decay: 5.0e-4
+  warmup_epochs: 3.0
+  warmup_momentum: 0.8
+  warmup_bias_lr: 0.1
+  # EMA
+  ema_decay: 0.9999
+  ema_tau: 2000
+
+data:
+  standard_root: datasets/standard
+  imgsz: ${model.imgsz}
+  batch_size: 16
+  num_workers: 8
+  mosaic_p: 1.0
+  hsv: [0.015, 0.7, 0.4]
+  flip_p: 0.5
+  aug_scale: 0.5
+  aug_translate: 0.1
+  person_only: true
+  use_crowdhuman: true
+  use_mot17: true
+  mot17_train_split: train_half           # ByteTrack convention — avoid val_half leak
+
+trainer:
+  max_epochs: 50
+  precision: bf16-mixed                   # Blackwell BF16; never FP16
+  devices: 2
+  accelerator: gpu
+  strategy: ddp                           # auto-converts to single-device when devices=1
+  sync_batchnorm: true                    # only effective under DDP
+  gradient_clip_val: 10.0
+  log_every_n_steps: 20
+  check_val_every_n_epoch: 1
+  val_check_interval: 1.0    # 1.0 = end-of-epoch; 0.5 = also mid-epoch
+
+# Mosaic-close: turn off mosaic at this fraction of total epochs (Ultralytics 'close-mosaic' trick)
+close_mosaic_fraction: 0.85
+
+wandb:
+  enabled: true
+  project: yolo-jdt
+  group: phase3
+  notes: ""
