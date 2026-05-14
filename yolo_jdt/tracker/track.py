@@ -60,7 +60,13 @@ def _xywh_to_xyxy(xywh: np.ndarray) -> np.ndarray:
 
 @dataclass
 class Track:
-    """Single-track state. Owns its Kalman filter + lifecycle counters."""
+    """Single-track state. Owns its Kalman filter + lifecycle counters.
+
+    Optional `embedding` field carries an L2-normalized ReID feature vector;
+    BoT-SORT-ReID consumes it to build the appearance cost matrix. Updated
+    via EMA when a new matched detection arrives (controlled by
+    `Track.update_embedding(...)` — call from the tracker's update path).
+    """
 
     measurement_xywh: np.ndarray              # last observed bbox [x, y, w, h]
     score: float                              # last detection confidence
@@ -74,6 +80,7 @@ class Track:
     kalman: KalmanFilter = field(default_factory=KalmanFilter)
     mean: np.ndarray | None = None
     covariance: np.ndarray | None = None
+    embedding: np.ndarray | None = None       # [reid_dim] L2-normalized; None if no ReID
 
     def activate(self, frame_id: int):
         """Promote a NEW track to TRACKED state and assign a global ID."""
@@ -131,6 +138,17 @@ class Track:
 
     def mark_removed(self):
         self.state = TrackState.REMOVED
+
+    def update_embedding(self, new_emb: np.ndarray, alpha: float = 0.9) -> None:
+        """EMA-blend a new ReID embedding into `self.embedding`. Re-normalizes
+        to unit length after blending. `alpha` weights the existing embedding."""
+        if new_emb is None:
+            return
+        if self.embedding is None:
+            self.embedding = new_emb / (np.linalg.norm(new_emb) + 1e-9)
+            return
+        blended = alpha * self.embedding + (1.0 - alpha) * new_emb
+        self.embedding = blended / (np.linalg.norm(blended) + 1e-9)
 
     @property
     def predicted_xywh(self) -> np.ndarray:

@@ -67,6 +67,8 @@ def main():
     ap.add_argument("--nc", type=int, default=1, help="Number of classes (default 1=person-only)")
     ap.add_argument("--prefer", default="ema", choices=["ema", "online"],
                     help="Which weights to prefer when both are present (default: ema)")
+    ap.add_argument("--model", default="det", choices=["det", "jde"],
+                    help="Model type for sanity-load: 'det' = YOLO11 (default), 'jde' = JointHead")
     args = ap.parse_args()
 
     if not args.src.is_dir():
@@ -103,9 +105,13 @@ def main():
         else:
             cleaned_sd[k] = v
 
-    # Sanity-load into a fresh YOLO11 to catch any mismatch BEFORE we save.
-    from yolo_jdt.models.yolo11 import YOLO11
-    model = YOLO11(scale=args.scale, nc=args.nc)
+    # Sanity-load into a fresh model to catch any mismatch BEFORE we save.
+    if args.model == "jde":
+        from yolo_jdt.train.jde_lightning_module import _YOLO11WithJointHead
+        model = _YOLO11WithJointHead(scale=args.scale, nc=args.nc)
+    else:
+        from yolo_jdt.models.yolo11 import YOLO11
+        model = YOLO11(scale=args.scale, nc=args.nc)
     missing, unexpected = model.load_state_dict(cleaned_sd, strict=False)
     if unexpected:
         sys.exit(f"[promote_ckpt] FAIL: {len(unexpected)} unexpected keys: "
