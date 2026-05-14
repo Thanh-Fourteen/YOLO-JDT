@@ -65,7 +65,17 @@ class CrossAttentionBlock(nn.Module):
                      by num_heads). For YOLO11s P5 = 512, head_dim = 64 per spec.
         num_heads:   number of attention heads (default 8).
         ffn_ratio:   FFN hidden dim = in_channels * ffn_ratio (default 2).
+
+    Attention capture (for visualization only — not thread-safe):
+        Set `CrossAttentionBlock.capture_attention = True` before the forward
+        call; the attention weights [B, num_heads, L, L] will be stored in
+        `self._last_attn_weights` (CPU tensor, detached).  When True, the
+        forward uses a manual softmax path instead of SDPA so the weights are
+        accessible.
     """
+
+    # Class-level flag: enable before inference for visualization, disable after.
+    capture_attention: bool = False
 
     def __init__(self, in_channels: int, num_heads: int = 8, ffn_ratio: int = 2):
         super().__init__()
@@ -123,9 +133,18 @@ class CrossAttentionBlock(nn.Module):
         k = k.view(B, L, self.num_heads, self.head_dim).transpose(1, 2)
         v = v.view(B, L, self.num_heads, self.head_dim).transpose(1, 2)
 
-        # SDPA — auto-selects FlashAttn/math backend; no explicit scale needed
-        attn = F.scaled_dot_product_attention(q, k, v)   # [B, nh, L, hd]
-        attn = attn.transpose(1, 2).reshape(B, L, C)
+        if self.capture_attention:
+            # Manual softmax attention so weights are accessible for visualization.
+            scale = self.head_dim ** -0.5
+            raw = (q @ k.transpose(-2, -1)) * scale          # [B, nh, L, L]
+            attn_w = raw.float().softmax(dim=-1).to(q.dtype)  # stable in fp32
+            self._last_attn_weights = attn_w.detach().cpu()   # [B, nh, L, L]
+            attn_out = attn_w @ v
+        else:
+            # SDPA — auto-selects FlashAttn/math backend; no explicit scale needed
+            attn_out = F.scaled_dot_product_attention(q, k, v)   # [B, nh, L, hd]
+
+        attn = attn_out.transpose(1, 2).reshape(B, L, C)
         attn = self.proj_out(attn)
 
         Ft = Ft + attn  # cross-attn residual

@@ -67,8 +67,13 @@ def main():
     ap.add_argument("--nc", type=int, default=1, help="Number of classes (default 1=person-only)")
     ap.add_argument("--prefer", default="ema", choices=["ema", "online"],
                     help="Which weights to prefer when both are present (default: ema)")
-    ap.add_argument("--model", default="det", choices=["det", "jde"],
-                    help="Model type for sanity-load: 'det' = YOLO11 (default), 'jde' = JointHead")
+    ap.add_argument("--model", default="det", choices=["det", "jde", "jdt"],
+                    help="Model type for sanity-load: 'det' = YOLO11, 'jde' = JointHead, 'jdt' = YOLO_JDT")
+    ap.add_argument("--cache-levels", default="P5",
+                    choices=["P5", "P4+P5", "P3+P4+P5"],
+                    help="TAGate cache levels (only used when --model=jdt)")
+    ap.add_argument("--tagate-num-layers", type=int, default=2,
+                    help="TAGate layers (only used when --model=jdt)")
     args = ap.parse_args()
 
     if not args.src.is_dir():
@@ -109,6 +114,11 @@ def main():
     if args.model == "jde":
         from yolo_jdt.train.jde_lightning_module import _YOLO11WithJointHead
         model = _YOLO11WithJointHead(scale=args.scale, nc=args.nc)
+    elif args.model == "jdt":
+        from yolo_jdt.models.yolo_jdt import YOLO_JDT
+        model = YOLO_JDT(scale=args.scale, nc=args.nc,
+                         cache_levels=args.cache_levels,
+                         tagate_num_layers=args.tagate_num_layers)
     else:
         from yolo_jdt.models.yolo11 import YOLO11
         model = YOLO11(scale=args.scale, nc=args.nc)
@@ -132,6 +142,13 @@ def main():
         "epoch": ckpt.get("epoch"),
         "global_step": ckpt.get("global_step"),
     }
+    # Store TAGate metadata when promoting a JDT checkpoint
+    if args.model == "jdt":
+        payload["cache_levels"] = args.cache_levels
+        payload["tagate_num_layers"] = args.tagate_num_layers
+    # Carry over reid_classifier for JDE/JDT so infer scripts can use it
+    if "reid_classifier_state_dict" in ckpt:
+        payload["reid_classifier_state_dict"] = ckpt["reid_classifier_state_dict"]
     torch.save(payload, args.dst)
     print(f"[promote_ckpt] wrote {args.dst} ({args.dst.stat().st_size / 1e6:.1f} MB)")
 

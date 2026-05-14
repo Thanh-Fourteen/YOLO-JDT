@@ -56,13 +56,17 @@ class PairedFrameDataset(Dataset):
     """Yields (frame_t, frame_{t-1}) pairs with shared augmentation state.
 
     Args:
-        base:        A StandardSeqDataset exposing (seq_idx, frame_idx) via _index.
-        imgsz:       Output spatial resolution (default 640).
-        hsv:         (h_gain, s_gain, v_gain) for HSV jitter.
-        flip_p:      Probability of horizontal flip.
-        scale:       Random scale range for affine augmentation.
-        translate:   Random translate fraction for affine augmentation.
-        person_only: Keep only class_id == 0 (person) boxes.
+        base:          A StandardSeqDataset exposing (seq_idx, frame_idx) via _index.
+        imgsz:         Output spatial resolution (default 640).
+        hsv:           (h_gain, s_gain, v_gain) for HSV jitter.
+        flip_p:        Probability of horizontal flip.
+        scale:         Random scale range for affine augmentation.
+        translate:     Random translate fraction for affine augmentation.
+        person_only:   Keep only class_id == 0 (person) boxes.
+        global_id_map: Optional dict mapping (seq_name, local_track_id) → global_int.
+                       When provided, track_ids in returned items are replaced with
+                       the global IDs required by JointDetectionReIDLoss.  Instances
+                       absent from the map (and track_id < 0) are mapped to -1.
     """
 
     def __init__(
@@ -74,6 +78,7 @@ class PairedFrameDataset(Dataset):
         scale: float = 0.5,
         translate: float = 0.1,
         person_only: bool = True,
+        global_id_map: dict | None = None,
     ):
         self.base = base
         self.imgsz = imgsz
@@ -82,6 +87,7 @@ class PairedFrameDataset(Dataset):
         self.scale = scale
         self.translate = translate
         self.person_only = person_only
+        self.global_id_map = global_id_map
 
         # Build pairing index: (flat_idx_t, flat_idx_prev)
         # Sequences appear consecutively in base._index (sorted JSON glob).
@@ -110,6 +116,15 @@ class PairedFrameDataset(Dataset):
         if self.person_only:
             mask = cls == 0
             boxes, cls, track_ids = boxes[mask], cls[mask], track_ids[mask]
+
+        if self.global_id_map is not None:
+            seq_name = tgt["seq_name"]
+            mapped = np.full_like(track_ids, -1, dtype=np.int64)
+            for i, t in enumerate(track_ids):
+                if t >= 0:
+                    mapped[i] = self.global_id_map.get((seq_name, int(t)), -1)
+            track_ids = mapped
+
         return im, boxes, cls, track_ids, tgt["seq_name"], int(tgt["frame_id"])
 
     def _apply_aug(

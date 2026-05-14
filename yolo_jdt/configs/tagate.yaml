@@ -1,0 +1,91 @@
+# YOLO-JDT TAGate training config — Step 5.DE / Phase 5
+# Usage:
+#   # Stage A — freeze backbone+neck, train TAGate + JointHead ~5 epochs
+#   python -m yolo_jdt.scripts.train_tagate -cn tagate \
+#       run_name=step5_tagate_stageA model.stage=A trainer.max_epochs=5 \
+#       model.pretrained_weights=weights/ours/yolo11s_jde.pt
+#
+#   # Stage B — unfreeze all, fine-tune at LR/10 ~15 epochs
+#   python -m yolo_jdt.scripts.train_tagate -cn tagate \
+#       run_name=step5_tagate_stageB model.stage=B trainer.max_epochs=15 \
+#       model.pretrained_weights=runs/tagate/step5_tagate_stageA/last.ckpt
+
+defaults:
+  - _self_
+
+seed: 0
+run_name: step5_tagate_stageA
+output_dir: runs/tagate/${run_name}
+
+model:
+  scale: s
+  nc: 1
+  reg_max: 16
+  imgsz: 640
+  # Recommended start point: JDE checkpoint (backbone+neck+head match; tagates.* fresh)
+  pretrained_weights: weights/ours/yolo11s_jde.pt
+  channels_last: true
+
+  # Detection losses
+  box_gain: 7.5
+  cls_gain: 0.5
+  dfl_gain: 1.5
+
+  # ReID head
+  reid_dim: 128
+  reid_hidden: 256
+  num_track_ids: -1         # -1 = auto from datamodule.num_track_ids
+  lambda_reid: 0.1
+
+  # TAGate
+  cache_levels: P5          # P5 | P4+P5 | P3+P4+P5
+  tagate_num_layers: 2
+  tagate_num_heads: 8
+  tagate_ffn_ratio: 2
+
+  # Optimizer
+  lr0: 0.001                # Linear-scaled for bs=8 (lr_scaling memory feedback)
+  lrf: 0.01
+  momentum: 0.937
+  weight_decay: 5.0e-4
+  warmup_epochs: 1.0
+  warmup_momentum: 0.8
+  warmup_bias_lr: 0.01
+
+  # EMA
+  ema_decay: 0.9999
+  ema_tau: 2000
+
+  # Stage control
+  stage: A
+  stage_b_lr_scale: 0.1
+
+data:
+  standard_root: datasets/standard
+  imgsz: ${model.imgsz}
+  batch_size: 8
+  num_workers: 4
+  hsv: [0.015, 0.7, 0.4]
+  flip_p: 0.5
+  aug_scale: 0.5
+  aug_translate: 0.1
+  person_only: true
+  mot17_train_split: train_half
+
+trainer:
+  max_epochs: 5
+  precision: bf16-mixed
+  devices: 1
+  accelerator: gpu
+  strategy: auto
+  sync_batchnorm: false
+  gradient_clip_val: 10.0
+  log_every_n_steps: 20
+  check_val_every_n_epoch: 1
+  val_check_interval: 1.0
+
+wandb:
+  enabled: true
+  project: yolo-jdt
+  group: phase5
+  notes: ""
