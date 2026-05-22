@@ -56,16 +56,26 @@ class JointHead(DecoupledDetect):
             for c in ch
         )
 
-    def forward(self, x: list[torch.Tensor]):
-        # Compute ReID branch BEFORE the parent's cv2/cv3 mutate x[i] in place.
+    def forward(self, x: list[torch.Tensor],
+                x_reid: list[torch.Tensor] | None = None):
+        """
+        Args:
+            x:       per-level neck features for detection (cv2/cv3).
+            x_reid:  optional per-level features for ReID (cv4).  When provided,
+                     cv4 sees temporally-enhanced features while cv2/cv3 see the
+                     original neck features — no detection gradient reaches TAGate.
+                     When None (default), cv4 uses x (backward-compatible).
+        """
+        reid_src = x_reid if x_reid is not None else x
+
+        # ReID branch BEFORE the parent's cv2/cv3 mutate x[i] in place.
         reid = []
         for i in range(self.nl):
-            emb = self.cv4[i](x[i])                            # [B, reid_dim, H, W]
+            emb = self.cv4[i](reid_src[i])                     # [B, reid_dim, H, W]
             emb = F.normalize(emb, dim=1, p=2, eps=1e-6)       # unit-norm along channel
             reid.append(emb)
 
-        # Detection branches (parent's exact computation, kept inline so we can
-        # tack `reid` onto the eval-mode tuple cleanly).
+        # Detection branches (parent's exact computation).
         for i in range(self.nl):
             x[i] = torch.cat((self.cv2[i](x[i]), self.cv3[i](x[i])), 1)
 

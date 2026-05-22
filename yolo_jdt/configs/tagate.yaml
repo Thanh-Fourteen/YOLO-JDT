@@ -1,20 +1,20 @@
-# YOLO-JDT TAGate training config — Step 5.DE / Phase 5
-# Usage:
-#   # Stage A — freeze backbone+neck, train TAGate + JointHead ~5 epochs
-#   python -m yolo_jdt.scripts.train_tagate -cn tagate \
-#       run_name=step5_tagate_stageA model.stage=A trainer.max_epochs=5 \
-#       model.pretrained_weights=weights/ours/yolo11s_jde.pt
+# YOLO-JDT TAGate training config — Step 5.DE pivot (track-offset)
 #
-#   # Stage B — unfreeze all, fine-tune at LR/10 ~15 epochs
+# Pivot (2026-05-22): TAGate no longer trains the ReID branch. The temporal
+# cross-attention now feeds a TrackOffsetHead that predicts per-anchor
+# inter-frame motion. The ENTIRE JDE model (backbone+neck+cv2+cv3+cv4) is
+# frozen — only TAGate + TrackOffsetHead train. Single stage.
+#
+# Usage:
 #   python -m yolo_jdt.scripts.train_tagate -cn tagate \
-#       run_name=step5_tagate_stageB model.stage=B trainer.max_epochs=15 \
-#       model.pretrained_weights=runs/tagate/step5_tagate_stageA/last.ckpt
+#       run_name=step5_jdt_offset trainer.max_epochs=25 \
+#       model.pretrained_weights=weights/ours/yolo11s_jde.pt
 
 defaults:
   - _self_
 
 seed: 0
-run_name: step5_tagate_stageA
+run_name: step5_jdt_offset
 output_dir: runs/tagate/${run_name}
 
 model:
@@ -22,26 +22,31 @@ model:
   nc: 1
   reg_max: 16
   imgsz: 640
-  # Recommended start point: JDE checkpoint (backbone+neck+head match; tagates.* fresh)
+  # JDE checkpoint: backbone+neck+head load; tagates.* + offset_head.* stay fresh.
   pretrained_weights: weights/ours/yolo11s_jde.pt
   channels_last: true
 
-  # Detection losses
+  # Detection losses (unused in the pivot — det branch frozen; kept for compat)
   box_gain: 7.5
   cls_gain: 0.5
   dfl_gain: 1.5
 
-  # ReID head
+  # ReID head (frozen at JDE quality — not trained)
   reid_dim: 128
   reid_hidden: 256
   num_track_ids: -1         # -1 = auto from datamodule.num_track_ids
-  lambda_reid: 0.1
+  lambda_reid: 0.1          # unused in the pivot (ReID frozen)
 
-  # TAGate
-  cache_levels: P5          # P5 | P4+P5 | P3+P4+P5
+  # TAGate — temporal cross-attention (feeds the offset head only)
+  cache_levels: P5          # P5 | P4+P5 | P3+P4+P5  (cross-attention compute)
   tagate_num_layers: 2
   tagate_num_heads: 8
   tagate_ffn_ratio: 2
+  tagate_gate_init: 0.0     # unused (CrossAttentionBlock.proj_out is zero-init)
+
+  # Track-offset head (Step 5.DE pivot)
+  offset_hidden: 256        # hidden Conv width of TrackOffsetHead
+  offset_gain: 1.0          # SmoothL1 offset-loss weight
 
   # Optimizer
   lr0: 0.001                # Linear-scaled for bs=8 (lr_scaling memory feedback)
@@ -56,9 +61,13 @@ model:
   ema_decay: 0.9999
   ema_tau: 2000
 
-  # Stage control
+  # Schedule control — kept for config/ckpt compat; the pivot is single-stage
+  # (the entire JDE model is frozen unconditionally; only TAGate + offset train).
   stage: A
-  stage_b_lr_scale: 0.1
+  stage_b_lr_scale: 1.0
+  tagate_lr_scale: 1.0
+  stage_a_alpha: null
+  freeze_detection_head: true
 
 data:
   standard_root: datasets/standard
@@ -73,7 +82,7 @@ data:
   mot17_train_split: train_half
 
 trainer:
-  max_epochs: 5
+  max_epochs: 25
   precision: bf16-mixed
   devices: 1
   accelerator: gpu

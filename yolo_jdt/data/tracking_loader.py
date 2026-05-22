@@ -23,6 +23,8 @@ Return format per item (flat dict, use collate_paired for batching):
         "bboxes_t":       Tensor[N,  4]    normalized (cx,cy,w,h)
         "cls_t":          Tensor[N]        int64 class ids
         "track_ids_t":    Tensor[N]        int64 local track ids (-1 if none)
+        "offsets_t":      Tensor[N,  2]    centre displacement to t-1 (normalized)
+        "offset_valid_t": Tensor[N]        bool — True if the track exists at t-1
         "bboxes_prev":    Tensor[M,  4]    same format for frame t-1
         "cls_prev":       Tensor[M]
         "track_ids_prev": Tensor[M]
@@ -30,6 +32,12 @@ Return format per item (flat dict, use collate_paired for batching):
         "frame_id_t":     int  (1-indexed MOT convention)
         "frame_id_prev":  int  (frame_id_t - 1, or same at sequence start)
     }
+
+Track-offset GT (Step 5.DE pivot): `offsets_t[n] = centre_{t-1} − centre_t` for
+each box at frame t, found by matching its track_id against frame t-1. Boxes
+with no t-1 correspondence (new tracks, track_id < 0) get `offset_valid_t=False`
+and are masked out of the offset loss. For the zero-motion first-frame pair
+(frame_prev == frame_t) every offset is exactly 0 — a valid supervision signal.
 """
 from __future__ import annotations
 
@@ -50,6 +58,36 @@ from yolo_jdt.data.augment import (
 from yolo_jdt.data.datasets._base import StandardSeqDataset
 
 __all__ = ["PairedFrameDataset", "collate_paired"]
+
+
+def _compute_offsets(
+    boxes_t: np.ndarray, tids_t: np.ndarray,
+    boxes_prev: np.ndarray, tids_prev: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per-box centre displacement to the same track_id in frame t-1.
+
+    Args:
+        boxes_t/boxes_prev: (N,4)/(M,4) normalized (cx,cy,w,h).
+        tids_t/tids_prev:   (N,)/(M,) track ids (-1 = none).
+    Returns:
+        offsets (N,2) float32 = centre_prev − centre_t in normalized coords;
+        valid   (N,)  bool    = True when a t-1 correspondence was found.
+    """
+    n = len(boxes_t)
+    offsets = np.zeros((n, 2), dtype=np.float32)
+    valid = np.zeros((n,), dtype=bool)
+    if n == 0 or len(boxes_prev) == 0:
+        return offsets, valid
+    prev_centre = {
+        int(tids_prev[k]): boxes_prev[k, :2]
+        for k in range(len(boxes_prev)) if int(tids_prev[k]) >= 0
+    }
+    for i in range(n):
+        tid = int(tids_t[i])
+        if tid >= 0 and tid in prev_centre:
+            offsets[i] = prev_centre[tid] - boxes_t[i, :2]
+            valid[i] = True
+    return offsets, valid
 
 
 class PairedFrameDataset(Dataset):
@@ -196,12 +234,20 @@ class PairedFrameDataset(Dataset):
             im_prev, boxes_prev, cls_prev, tids_prev
         )
 
+        # Track-offset GT: centre displacement of each frame-t box to its
+        # match in frame t-1 (track_ids are global → plain equality match).
+        offsets_t, offset_valid_t = _compute_offsets(
+            boxes_t, tids_t, boxes_prev, tids_prev
+        )
+
         return {
             "img_t":          img_t,
             "img_prev":       img_prev,
             "bboxes_t":       torch.from_numpy(boxes_t).float(),
             "cls_t":          torch.from_numpy(cls_t).long(),
             "track_ids_t":    torch.from_numpy(tids_t).long(),
+            "offsets_t":      torch.from_numpy(offsets_t).float(),
+            "offset_valid_t": torch.from_numpy(offset_valid_t),
             "bboxes_prev":    torch.from_numpy(boxes_prev).float(),
             "cls_prev":       torch.from_numpy(cls_prev).long(),
             "track_ids_prev": torch.from_numpy(tids_prev).long(),
@@ -238,6 +284,12 @@ def collate_paired(batch: list[dict]) -> dict:
     bi_t,  bx_t,  cl_t,  ti_t  = _cat_with_idx("bboxes_t",  "cls_t",  "track_ids_t")
     bi_p,  bx_p,  cl_p,  ti_p  = _cat_with_idx("bboxes_prev", "cls_prev", "track_ids_prev")
 
+    # Offset GT — aligned with bboxes_t (same per-sample N, same order).
+    offs_t = torch.cat([s["offsets_t"] for s in batch]) if batch \
+        else torch.zeros((0, 2), dtype=torch.float32)
+    ovld_t = torch.cat([s["offset_valid_t"] for s in batch]) if batch \
+        else torch.zeros((0,), dtype=torch.bool)
+
     return {
         "img_t":           imgs_t,
         "img_prev":        imgs_prev,
@@ -246,6 +298,8 @@ def collate_paired(batch: list[dict]) -> dict:
         "bboxes_t":        bx_t,
         "cls_t":           cl_t,
         "track_ids_t":     ti_t,
+        "offsets_t":       offs_t,
+        "offset_valid_t":  ovld_t,
         # frame t-1
         "batch_idx_prev":  bi_p,
         "bboxes_prev":     bx_p,

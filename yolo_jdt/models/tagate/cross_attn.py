@@ -1,13 +1,17 @@
-"""Pre-LN multi-head cross-attention block with 2D sinusoidal positional encoding.
+"""Pre-LN multi-head cross-attention block — returns the attention DELTA only.
 
 Q = F_t (current frame), K/V = F_prev (cached previous frame).
 Uses F.scaled_dot_product_attention — no flash-attn dependency (SDPA auto-selects
 FlashAttention-3 backend on Blackwell sm_120 if available).
 
-Architecture per block:
-    1. Pre-LN cross-attention: F_t' = F_t + CrossAttn(norm_q(F_t), norm_kv(F_prev))
-       - 2D sinusoidal pos encoding added to Q and K (not V)
-    2. Pre-LN FFN:             F_t'' = F_t' + FFN(norm_ffn(F_t'))
+IMPORTANT — this block returns ONLY the cross-attention contribution
+(`proj_out(attention)`), NOT `F_t + attention`.  The residual connection and
+its gate are owned by the enclosing `GatedResidual` (Flamingo GATED
+XATTN-DENSE structure).  The previous design folded the query residual *and*
+the FFN into this block, which — combined with the outer gated residual —
+produced a `(1+α)·F_t` scaling that corrupted the pretrained detector at init
+(root cause of the Step 5.DE v1/v2 regression).  Keeping this block delta-only
+makes the enclosing layer a provable identity at init.
 """
 from __future__ import annotations
 
@@ -55,16 +59,18 @@ def _make_2d_sinusoidal(H: int, W: int, dim: int) -> Tensor:
 
 
 class CrossAttentionBlock(nn.Module):
-    """Pre-LN multi-head cross-attention + FFN block.
+    """Pre-LN multi-head cross-attention. Returns the attention delta only.
 
     Q comes from F_t (current frame), K and V come from F_prev (cached t-1).
     Sinusoidal 2D pos encoding is added to Q and K (not V) before projection.
+
+    Output = proj_out( MHA( norm_q(F_t)+pos , norm_kv(F_prev)+pos , norm_kv(F_prev) ) )
+    i.e. the *temporal correction*, with NO query residual added here.
 
     Args:
         in_channels: channel count of the input feature maps (must be divisible
                      by num_heads). For YOLO11s P5 = 512, head_dim = 64 per spec.
         num_heads:   number of attention heads (default 8).
-        ffn_ratio:   FFN hidden dim = in_channels * ffn_ratio (default 2).
 
     Attention capture (for visualization only — not thread-safe):
         Set `CrossAttentionBlock.capture_attention = True` before the forward
@@ -77,7 +83,7 @@ class CrossAttentionBlock(nn.Module):
     # Class-level flag: enable before inference for visualization, disable after.
     capture_attention: bool = False
 
-    def __init__(self, in_channels: int, num_heads: int = 8, ffn_ratio: int = 2):
+    def __init__(self, in_channels: int, num_heads: int = 8):
         super().__init__()
         if in_channels % num_heads != 0:
             raise ValueError(
@@ -95,15 +101,14 @@ class CrossAttentionBlock(nn.Module):
         self.proj_k = nn.Linear(in_channels, in_channels, bias=False)
         self.proj_v = nn.Linear(in_channels, in_channels, bias=False)
         self.proj_out = nn.Linear(in_channels, in_channels, bias=False)
-
-        # FFN: 2-layer MLP with GeLU, Pre-LN
-        ffn_dim = in_channels * ffn_ratio
-        self.norm_ffn = nn.LayerNorm(in_channels)
-        self.ffn = nn.Sequential(
-            nn.Linear(in_channels, ffn_dim),
-            nn.GELU(),
-            nn.Linear(ffn_dim, in_channels),
-        )
+        # Zero-init the output projection (ControlNet/LoRA-style). The block
+        # returns a pure delta; with proj_out=0 the delta is EXACTLY 0 at init
+        # → TAGate is a provable identity (det AND reid == JDE bit-for-bit),
+        # giving a hard HOTA≥JDE floor. Unlike a learnable scalar gate (grad ∝
+        # tiny attn magnitude → structurally un-trainable, cf. v1–v8), proj_out
+        # is a full [C,C] matrix: it receives O(C) healthy gradient terms from
+        # the ReID loss and trains away from zero normally.
+        nn.init.zeros_(self.proj_out.weight)
 
     def forward(self, F_t: Tensor, F_prev: Tensor) -> Tensor:
         """
@@ -111,7 +116,7 @@ class CrossAttentionBlock(nn.Module):
             F_t:    [B, C, H, W]  current frame neck features
             F_prev: [B, C, H, W]  cached previous frame neck features
         Returns:
-            [B, C, H, W]  temporally-enhanced features for current frame
+            [B, C, H, W]  attention DELTA (temporal correction, no residual)
         """
         B, C, H, W = F_t.shape
         L = H * W
@@ -147,9 +152,5 @@ class CrossAttentionBlock(nn.Module):
         attn = attn_out.transpose(1, 2).reshape(B, L, C)
         attn = self.proj_out(attn)
 
-        Ft = Ft + attn  # cross-attn residual
-
-        # Pre-LN FFN
-        Ft = Ft + self.ffn(self.norm_ffn(Ft))
-
-        return Ft.reshape(B, H, W, C).permute(0, 3, 1, 2).contiguous()
+        # Return the DELTA only — residual + gating handled by GatedResidual.
+        return attn.reshape(B, H, W, C).permute(0, 3, 1, 2).contiguous()

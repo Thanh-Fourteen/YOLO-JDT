@@ -128,3 +128,35 @@ def test_collate_paired(dataset):
     assert "track_ids_t" in batch
     assert len(batch["seq_names"]) == 4
     assert len(batch["frame_ids_t"]) == 4
+
+
+def test_offset_fields(dataset):
+    """Each item carries per-box GT offsets aligned with bboxes_t."""
+    item = dataset[10]
+    n = len(item["bboxes_t"])
+    assert item["offsets_t"].shape == (n, 2)
+    assert item["offset_valid_t"].shape == (n,)
+    assert item["offset_valid_t"].dtype == torch.bool
+
+
+def test_collate_offsets(dataset):
+    """collate_paired concatenates offsets aligned with the box rows."""
+    from yolo_jdt.data.tracking_loader import collate_paired
+
+    batch = collate_paired([dataset[i] for i in range(4)])
+    assert batch["offsets_t"].shape[0] == batch["bboxes_t"].shape[0]
+    assert batch["offsets_t"].shape[1] == 2
+    assert batch["offset_valid_t"].shape[0] == batch["bboxes_t"].shape[0]
+
+
+def test_first_frame_zero_offset(dataset):
+    """First frame of a sequence: frame_prev == frame_t → every box matches
+    itself → all offsets are exactly 0 (valid zero-motion supervision)."""
+    for idx, (flat_t, _flat_prev) in enumerate(dataset._pairs):
+        _, frame_idx = dataset.base._index[flat_t]
+        if frame_idx == 0:
+            item = dataset[idx]
+            if len(item["offsets_t"]):
+                assert item["offsets_t"].abs().max().item() < 1e-6
+                assert item["offset_valid_t"].all()
+            break

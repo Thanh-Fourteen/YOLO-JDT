@@ -1,15 +1,12 @@
-"""Hydra entry point for YOLO-JDT TAGate 2-stage training (Step 5.DE / Phase 5).
+"""Hydra entry point for YOLO-JDT TAGate track-offset training (Step 5.DE pivot).
+
+Single-stage: the entire JDE model is frozen; only TAGate + TrackOffsetHead
+train (SmoothL1 on per-anchor inter-frame motion).
 
 Usage:
-    # Stage A — freeze backbone+neck, train TAGate + JointHead ~5 epochs
     python -m yolo_jdt.scripts.train_tagate -cn tagate \\
-        run_name=step5_tagate_stageA model.stage=A trainer.max_epochs=5 \\
+        run_name=step5_jdt_offset trainer.max_epochs=25 \\
         model.pretrained_weights=weights/ours/yolo11s_jde.pt
-
-    # Stage B — unfreeze all, fine-tune at LR/10 ~15 epochs
-    python -m yolo_jdt.scripts.train_tagate -cn tagate \\
-        run_name=step5_tagate_stageB model.stage=B trainer.max_epochs=15 \\
-        model.pretrained_weights=runs/tagate/step5_tagate_stageA/last.ckpt
 """
 from __future__ import annotations
 
@@ -85,8 +82,14 @@ def main(cfg: DictConfig):
         tagate_num_layers=cfg.model.tagate_num_layers,
         tagate_num_heads=cfg.model.tagate_num_heads,
         tagate_ffn_ratio=cfg.model.tagate_ffn_ratio,
+        tagate_gate_init=cfg.model.tagate_gate_init,
+        offset_hidden=cfg.model.offset_hidden,
+        offset_gain=cfg.model.offset_gain,
         stage=cfg.model.stage,
         stage_b_lr_scale=cfg.model.stage_b_lr_scale,
+        tagate_lr_scale=cfg.model.tagate_lr_scale,
+        stage_a_alpha=cfg.model.stage_a_alpha,
+        freeze_detection_head=cfg.model.freeze_detection_head,
     )
 
     callbacks = [

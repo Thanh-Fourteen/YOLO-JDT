@@ -74,13 +74,22 @@ def main():
                     help="TAGate cache levels (only used when --model=jdt)")
     ap.add_argument("--tagate-num-layers", type=int, default=2,
                     help="TAGate layers (only used when --model=jdt)")
+    ap.add_argument("--use-last", action="store_true",
+                    help="Always promote from last.ckpt (ignores top-k best logic). "
+                         "Use when the monitored metric is flat (e.g. detection frozen).")
     args = ap.parse_args()
 
     if not args.src.is_dir():
         sys.exit(f"[promote_ckpt] --src is not a directory: {args.src}")
     args.dst.parent.mkdir(parents=True, exist_ok=True)
 
-    best = find_best_ckpt(args.src)
+    if args.use_last:
+        best = args.src / "last.ckpt"
+        if not best.exists():
+            sys.exit(f"[promote_ckpt] --use-last: last.ckpt not found in {args.src}")
+        print(f"[promote_ckpt] --use-last: loading {best}")
+    else:
+        best = find_best_ckpt(args.src)
     print(f"[promote_ckpt] loading {best}")
     ckpt = torch.load(best, map_location="cpu", weights_only=False)
 

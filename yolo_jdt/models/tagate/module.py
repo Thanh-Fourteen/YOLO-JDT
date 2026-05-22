@@ -35,12 +35,24 @@ class TAGate(nn.Module):
     """
 
     def __init__(self, in_channels: int, num_layers: int = 2,
-                 num_heads: int = 8, ffn_ratio: int = 2):
+                 num_heads: int = 8, ffn_ratio: int = 2,
+                 gate_init: float = 0.0):
         super().__init__()
         self.layers = nn.ModuleList([
-            GatedResidual(in_channels, num_heads=num_heads, ffn_ratio=ffn_ratio)
+            GatedResidual(in_channels, num_heads=num_heads,
+                          ffn_ratio=ffn_ratio, gate_init=gate_init)
             for _ in range(num_layers)
         ])
+
+    def set_stage_a_alpha(self, alpha: float | None) -> None:
+        """Set (or clear) the Stage-A curriculum gate override on every layer.
+
+        Pass a float (e.g. 0.1) during Stage A so the cross-attention learns
+        under a frozen backbone; pass None for Stage B / eval so the learned
+        tanh gates take over. Never affects ONNX export (eval mode).
+        """
+        for layer in self.layers:
+            layer.stage_a_alpha = alpha
 
     def forward(self, F_t: Tensor, F_prev: Tensor) -> Tensor:
         """Refine F_t with temporal context from F_prev.

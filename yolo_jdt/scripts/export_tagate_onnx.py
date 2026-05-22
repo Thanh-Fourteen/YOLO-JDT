@@ -3,10 +3,13 @@
 The ONNX graph signature uses flat positional inputs instead of list[Tensor]:
     Inputs:  image_t  [1, 3, 640, 640]
              cache_P5 [1, 512, 20, 20]   (for P5-only caching)
-    Outputs: decoded  [1, 5, 8400]        (nc=1 → 4+1 channels)
-             reid_P3  [1, 128, 80, 80]
-             reid_P4  [1, 128, 40, 40]
-             reid_P5  [1, 128, 20, 20]
+    Outputs: decoded   [1, 5, 8400]        (nc=1 → 4+1 channels)
+             reid_P3   [1, 128, 80, 80]
+             reid_P4   [1, 128, 40, 40]
+             reid_P5   [1, 128, 20, 20]
+             offset_P3 [1, 2, 80, 80]      (Δx, Δy per anchor)
+             offset_P4 [1, 2, 40, 40]
+             offset_P5 [1, 2, 20, 20]
              cache_out_P5  [1, 512, 20, 20]
 
 For multi-level cache (P4+P5, P3+P4+P5) additional cache inputs/outputs
@@ -37,8 +40,7 @@ class _JDT_ONNXWrapper(nn.Module):
     """Flattens list inputs/outputs for ONNX compatibility.
 
     ONNX does not support list[Tensor] as I/O; this wrapper accepts cache
-    tensors as positional args and returns all outputs as a flat tuple,
-    omitting None (offset_out placeholder in Phase 5).
+    tensors as positional args and returns all outputs as a flat tuple.
     """
 
     def __init__(self, model: YOLO_JDT):
@@ -47,9 +49,9 @@ class _JDT_ONNXWrapper(nn.Module):
 
     def forward(self, image_t: Tensor, *cache_tensors: Tensor) -> tuple:
         out = self.model(image_t, list(cache_tensors))
-        # eval mode: (decoded, raw_det, reid_list, None, feats_cache_list)
-        decoded, _, reid, _, feats_cache = out
-        return (decoded, *reid, *feats_cache)
+        # eval mode: (decoded, raw_det, reid_list, offset_list, feats_cache_list)
+        decoded, _, reid, offset, feats_cache = out
+        return (decoded, *reid, *offset, *feats_cache)
 
 
 def export_onnx(
@@ -75,6 +77,7 @@ def export_onnx(
     output_names = (
         ["decoded"]
         + [f"reid_{t}" for t in ["P3", "P4", "P5"]]
+        + [f"offset_{t}" for t in ["P3", "P4", "P5"]]
         + [f"cache_out_{t}" for t in level_tags]
     )
 

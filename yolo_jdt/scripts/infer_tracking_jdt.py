@@ -140,7 +140,7 @@ def infer_one_seq(model: YOLO_JDT, device: torch.device, dtype: torch.dtype,
         times["preproc"].append(t2 - t1)
 
         with torch.no_grad():
-            decoded, _, reid_per_level, _, features_to_cache = model(x, cache)
+            decoded, _, reid_per_level, offset_out, features_to_cache = model(x, cache)
         # Update rolling cache for next frame
         cache = features_to_cache
         if device.type == "cuda":
@@ -169,6 +169,18 @@ def infer_one_seq(model: YOLO_JDT, device: torch.device, dtype: torch.dtype,
             )   # [reid_dim, A]
             embs = reid_flat[:, anchor_idx].T.float().cpu().numpy()
 
+            # Track-offset: gather per-detection (Δx, Δy) at the surviving
+            # anchors. Offsets are normalized [0,1] in canvas space; a
+            # displacement, so letterbox padding cancels — only ÷ratio is
+            # needed to reach original-image pixels.
+            offset_flat = torch.cat(
+                [offset_out[lvl][0].reshape(2, -1)
+                 for lvl in range(len(offset_out))],
+                dim=1,
+            )   # [2, A]
+            offs = offset_flat[:, anchor_idx].T.float().cpu().numpy()  # [N, 2]
+            offs_orig = offs * float(imgsz) / ratio
+
             boxes_640 = boxes_xyxy_n * float(imgsz)
             boxes_orig = boxes_640.copy()
             boxes_orig[:, [0, 2]] = (boxes_640[:, [0, 2]] - pad_l) / ratio
@@ -180,11 +192,13 @@ def infer_one_seq(model: YOLO_JDT, device: torch.device, dtype: torch.dtype,
         else:
             dets = np.empty((0, 5))
             embs = None
+            offs_orig = None
         t5 = time.perf_counter()
         times["postproc"].append(t5 - t4)
 
         active = tracker.update(dets, frame_id=renumbered_fid,
-                                 frame=img_bgr, embeddings=embs)
+                                 frame=img_bgr, embeddings=embs,
+                                 offsets=offs_orig)
         for tr in active:
             xb, yb, wb, hb = tr.measurement_xywh
             records.append((renumbered_fid, tr.track_id,
@@ -233,6 +247,11 @@ def main():
     ap.add_argument("--device", default="cuda:0")
     ap.add_argument("--bf16", action="store_true", default=True)
     ap.add_argument("--seqs", nargs="+", default=None)
+    # Associator cost weights. --w-offset 0 disables the track-offset cue
+    # (→ exact BoT-SORT-ReID, for the A/B ablation).
+    ap.add_argument("--w-iou", type=float, default=0.5)
+    ap.add_argument("--w-reid", type=float, default=0.3)
+    ap.add_argument("--w-offset", type=float, default=0.2)
     args = ap.parse_args()
 
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
@@ -256,7 +275,10 @@ def main():
     if args.seqs:
         json_paths = [p for p in json_paths if p.stem in set(args.seqs)]
 
-    tracker_factory = lambda: BoTSORTReIDTracker(BoTSORTReIDConfig())
+    print(f"[infer_jdt] associator weights: w_iou={args.w_iou} "
+          f"w_reid={args.w_reid} w_offset={args.w_offset}")
+    tracker_factory = lambda: BoTSORTReIDTracker(BoTSORTReIDConfig(
+        w_iou=args.w_iou, w_reid=args.w_reid, w_offset=args.w_offset))
 
     all_fps = {}
     for json_path in json_paths:
